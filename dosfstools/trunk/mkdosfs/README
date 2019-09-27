@@ -49,7 +49,7 @@ One bigger bug fix besides FAT32 was to reject filesystems that need a
 16 bit FAT to fit all possible clusters, but the bigger FAT needs some
 more sectors, so the total number of clusters drop below the border
 where MS-DOS expects a 12 bit FAT. So such filesystems would be FAT16,
-but interpreted as FAT32 by DOS. The fix is to reduce filesystem size
+but interpreted as FAT12 by DOS. The fix is to reduce filesystem size
 a bit.
 
 - Roman <roman@hodek.net>
