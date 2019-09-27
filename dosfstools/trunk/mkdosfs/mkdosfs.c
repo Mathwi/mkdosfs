@@ -62,6 +62,7 @@
 #define inline
 #define __attribute__(x)
 #define BLOCK_SIZE		512
+#define BLOCK_SIZE_BITS 9
 #else
 #include <linux/hdreg.h>
 #include <linux/fs.h>
@@ -290,7 +291,7 @@ static loff_t WIN32llseek(int fd, loff_t offset, int whence)
 		errno = err;
 		return -1;
 	}
-	return ((loff_t)hi << 32) | (unsigned long)lo;
+	return ((loff_t)hi << 32) | (off_t)lo;
 }
 
 int fsctl(int fd, int code)
@@ -936,13 +937,30 @@ establish_params (void)
 		bs.media = (char) 0xf8; /* Set up the media descriptor for a hard drive */
 		bs.dir_entries[0] = (char) 0;
 		bs.dir_entries[1] = (char) 2;
-		/* For FAT32, use 4k clusters on sufficiently large file systems,
-		 * otherwise 1 sector per cluster. This is also what M$'s format
-		 * command does for FAT32. */
-		bs.cluster_size = (char)
-		 (size_fat == 32 ?
-	     ((ll_t)blocks*SECTORS_PER_BLOCK >= 512*1024 ? 8 : 1) :
-	      4); /* FAT12 and FAT16: start at 4 sectors per cluster */
+      if (!size_fat && blocks*SECTORS_PER_BLOCK > 1064960) {
+	  if (verbose) printf("Auto-selecting FAT32 for large filesystem\n");
+	  size_fat = 32;
+      }
+      if (size_fat == 32) {
+	  /* For FAT32, try to do the same as M$'s format command:
+	   * fs size < 256M: 0.5k clusters
+	   * fs size <   8G:  4k clusters
+	   * fs size <  16G:  8k clusters
+	   * fs size <  32G: 16k clusters
+	   * fs size >= 32G: 32k clusters	M$'s format command won't format partitions this large as FAT32,
+										so we'll just continue the pattern M$ used for 8G-32G partitions */
+	  unsigned long sz_mb =
+	      (blocks+(1<<(20-BLOCK_SIZE_BITS))-1) >> (20-BLOCK_SIZE_BITS);
+	  bs.cluster_size = sz_mb >= 32*1024 ? 64 :
+			    sz_mb >= 16*1024 ? 32 :
+			    sz_mb >=  8*1024 ? 16 :
+			    sz_mb >=     256 ?  8 :
+					        1;
+      }
+      else {
+	  /* FAT12 and FAT16: start at 4 sectors per cluster */
+	  bs.cluster_size = (char) 4;
+      }
 	}
 }
 #else
@@ -1271,7 +1289,8 @@ setup_tables (void)
 
       /* The factor 2 below avoids cut-off errors for nr_fats == 1.
        * The "nr_fats*3" is for the reserved first two FAT entries */
-      clust12 = 2*((ll_t) fatdata *sector_size + nr_fats*3) /
+      if (size_fat == 0 || size_fat == 12) {
+		clust12 = 2*((ll_t) fatdata *sector_size + nr_fats*3) /
 	(2*(int) bs.cluster_size * sector_size + nr_fats*3);
       fatlength12 = cdiv (((clust12+2) * 3 + 1) >> 1, sector_size);
       /* Need to recalculate number of clusters, since the unused parts of the
@@ -1287,9 +1306,11 @@ setup_tables (void)
       if (clust12 > maxclust12-2) {
 	clust12 = 0;
 	if (verbose >= 2)
-	  printf( "FAT12: too much clusters\n" );
-      }
+	  printf( "FAT12: too many clusters\n" );
+	  }
+	  }
 
+      if (size_fat == 0 || size_fat == 16) {
       clust16 = ((ll_t) fatdata *sector_size + nr_fats*4) /
 	((int) bs.cluster_size * sector_size + nr_fats*2);
       fatlength16 = cdiv ((clust16+2) * 2, sector_size);
@@ -1305,22 +1326,23 @@ setup_tables (void)
 		clust16, fatlength16, maxclust16, MAX_CLUST_16 );
       if (clust16 > maxclust16-2) {
 	if (verbose >= 2)
-	  printf( "FAT16: too much clusters\n" );
+	  printf( "FAT16: too many clusters\n" );
 	clust16 = 0;
-      }
+      } else {
       /* The < 4078 avoids that the filesystem will be misdetected as having a
        * 12 bit FAT. */
-      if (clust16 < FAT12_THRESHOLD && !(size_fat_by_user && size_fat == 16)) {
-	if (verbose >= 2)
-	  printf( clust16 < FAT12_THRESHOLD ?
-		  "FAT16: would be misdetected as FAT12\n" :
-		  "FAT16: too much clusters\n" );
-	clust16 = 0;
-      }
+	if (clust16 < FAT12_THRESHOLD && !(size_fat_by_user && size_fat == 16)) {
+	  if (verbose >= 2)
+		printf( "FAT16: would be misdetected as FAT12\n" );
+	  clust16 = 0;
+	}
+	  }
+	  }
 
+      if (size_fat == 32) {
       clust32 = ((ll_t) fatdata *sector_size + nr_fats*8) /
 	((int) bs.cluster_size * sector_size + nr_fats*4);
-      fatlength32 = cdiv ((clust32+2) * 4, sector_size);
+      fatlength32 = (cdiv ((clust32+2) * 4, sector_size)+31)&(-32);
       /* Need to recalculate number of clusters, since the unused parts of the
        * FATS and data area together could make up space for an additional,
        * not really present cluster. */
@@ -1339,8 +1361,9 @@ setup_tables (void)
       if (clust32 > maxclust32) {
 	clust32 = 0;
 	if (verbose >= 2)
-	  printf( "FAT32: too much clusters\n" );
+	  printf( "FAT32: too many clusters\n" );
       }
+	  }
 
       if ((clust12 && (size_fat == 0 || size_fat == 12)) ||
 	  (clust16 && (size_fat == 0 || size_fat == 16)) ||
@@ -1432,7 +1455,7 @@ setup_tables (void)
       printf( "Sector size must be %d to have less than %d log. sectors\n",
 	      sector_size, GEMDOS_MAX_SECTORS );
 
-    /* Check if there are enough FAT indices for how much clusters we have */
+    /* Check if there are enough FAT indices for how many clusters we have */
     do {
       fatdata = num_sectors - cdiv (root_dir_entries * 32, sector_size) -
 		reserved_sectors;
@@ -1715,18 +1738,20 @@ write_tables (void)
     }
   /* seek to start of FATS and write them all */
   seekto( reserved_sectors*sector_size, "first FAT" );
-  for (x = 1; x <= nr_fats; x++)
+  for (x = 1; x <= nr_fats; x++) {
 #ifdef _WIN32
 	  /*
 	   * WIN32 appearently has problems writing very large chunks directly
 	   * to disk devices. To not produce errors because of resource shortages
-	   * split up the write in sector size chunks.
+	   * split up the write in 64-sector sized chunks.
 	   */
-	  for (blk = 0; blk < fat_length; blk++)
-		  writebuf(fat+blk*sector_size, sector_size, "FAT");
+	for (blk = 0; blk < fat_length-64; blk+=64)
+	  writebuf( fat+blk*sector_size, 64*sector_size, "FAT" );
+	writebuf( fat+blk*sector_size, (fat_length-blk) * sector_size, "FAT" );
 #else
     writebuf( fat, fat_length * sector_size, "FAT" );
 #endif
+  }
   /* Write the root directory directly after the last FAT. This is the root
    * dir area on FAT12/16, and the first cluster on FAT32. */
   writebuf( (char *) root_dir, size_root_dir, "root directory" );
