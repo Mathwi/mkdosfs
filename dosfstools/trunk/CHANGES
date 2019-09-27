@@ -1,3 +1,11 @@
+version 2.12
+============
+
+ - mkdosfs: port "by default, use FAT32 on devices >= 512MB" to Win32 code
+ - mkdosfs: align FAT32 FATs and clusters on 16KiB boundaries for better AF/SSD performance
+ - mkdosfs: speed up writing of FATs on Win32 platform
+ - mkdosfs: change "Too much clusters" message to read "Too many clusters"
+
 version 2.11
 ============
 
