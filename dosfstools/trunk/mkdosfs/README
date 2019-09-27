@@ -30,9 +30,12 @@ dave@humbug.demon.co.uk
 FAT32 support
 =============
 
-mkdosfs now can also create filesystems in the new FAT32 format. To do this, 
+mkdosfs now can also create filesystems in the FAT32 format. To do this, 
 give mkdosfs a "-F 32" option. If -F isn't specified, FAT32 is automatically
-selected for volumes >= 512 MiB; otherwise, FAT12 or FAT16 is selected. 
+selected for volumes >= 512 MiB; otherwise, FAT12 or FAT16 is selected.
+
+- Mathwi 
+
 
 With FAT32 you have two additional options, -R to select the number of re-
 served sectors (usually 32), and -b to select the location of the backup boot 
